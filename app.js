@@ -98,7 +98,13 @@ function saveParams() { try { localStorage.setItem(LS_KEY, JSON.stringify(P)); }
 
 // ───────────────────────── DOM ─────────────────────────
 const $ = (s) => document.querySelector(s);
-const video = $('#cam'), canvas = $('#stage'), ui = $('#ui'), uctx = ui.getContext('2d');
+// Si el index.html es de una versión anterior y no trae el lienzo de interfaz, se crea acá.
+const ui = $('#ui') || (() => {
+  const c = document.createElement('canvas'); c.id = 'ui';
+  c.style.cssText = 'position:fixed;left:0;top:0;display:block;pointer-events:none;z-index:2';
+  $('#stage').after(c); return c;
+})();
+const video = $('#cam'), canvas = $('#stage'), uctx = ui.getContext('2d');
 const startEl = $('#start'), startErr = $('#startErr'), rotateEl = $('#rotate'), panel = $('#panel');
 let renderer = null, maskU8 = null;
 let VW = 640, VH = 480, dpr = 1;
