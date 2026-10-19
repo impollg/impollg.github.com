@@ -2,9 +2,12 @@
 // Cada fantasma es esa misma imagen deformada hacia la pose predicha: una malla fina sobre el cuerpo,
 // donde cada vértice sigue a los huesos cercanos (skinning 2D). Los fantasmas se acumulan en un
 // búfer con estela, desenfoque y grano.
-import { NB } from './core.js?v=21';
+import { NB } from './core.js?v=23';
 
-const VS_MESH = `#version 300 es
+// Tres variantes del programa de deformación, de más rica a más liviana: si un teléfono no puede
+// armar una, se prueba la siguiente.
+function vsMesh(mode) {
+  return `#version 300 es
 precision highp float;
 #define NB ${NB}
 in vec2 a_uv;
@@ -12,11 +15,9 @@ uniform vec4 u_box; uniform vec2 u_video; uniform vec4 u_view;
 uniform int u_nb; uniform vec4 u_bone[NB]; uniform vec3 u_mx[NB]; uniform vec3 u_my[NB]; uniform float u_sigma;
 out vec2 v_tex;
 out float v_keep;
-// Skinning 2D: cada punto sigue a los huesos cercanos, con peso inverso a la distancia (potencia 4).
 vec3 warp(vec2 p) {
   float ws = 0.0; vec2 acc = vec2(0.0); float acc2 = 0.0; vec3 P = vec3(p, 1.0);
   for (int i = 0; i < NB; i++) {
-    if (i >= u_nb) break;
     vec2 A = u_bone[i].xy, ab = u_bone[i].zw - A;
     float t = clamp(dot(p - A, ab) / max(dot(ab, ab), 1e-3), 0.0, 1.0);
     float d = length(p - (A + ab * t)) / u_sigma;
@@ -34,18 +35,23 @@ void main() {
   vec2 q = p;
   v_keep = 1.0;
   if (u_nb > 0) {
-    vec3 w0 = warp(p);
+${mode === 'full' ? `    vec3 w0 = warp(p);
     q = w0.xy;
-    // Estiramiento local: si la malla se estira, se pliega o se desgarra, esa zona se desvanece.
     float h = 3.0;
-    vec2 jx = (warp(p + vec2(h, 0.0)).xy - q) / h, jy = (warp(p + vec2(0.0, h)).xy - q) / h;
+    vec2 jx = (warp(p + vec2(h, 0.0)).xy - q) / h;
+    vec2 jy = (warp(p + vec2(0.0, h)).xy - q) / h;
     float stretch = max(length(jx), length(jy));
     float det = jx.x * jy.y - jx.y * jy.x;
-    v_keep = (1.0 - smoothstep(1.8, 3.2, stretch)) * smoothstep(0.08, 0.3, det)
-           * (1.0 - smoothstep(0.5, 1.8, w0.z / u_sigma));
+    v_keep = (1.0 - smoothstep(1.8, 3.2, stretch)) * smoothstep(0.08, 0.3, det) * (1.0 - smoothstep(0.5, 1.8, w0.z / u_sigma));`
+  : mode === 'lite' ? `    vec3 w0 = warp(p);
+    q = w0.xy;
+    v_keep = 1.0 - smoothstep(0.5, 1.6, w0.z / u_sigma);`
+  : `    vec3 P = vec3(p, 1.0);
+    q = vec2(dot(u_mx[2], P), dot(u_my[2], P));`}
   }
   gl_Position = vec4(q * u_view.xy + u_view.zw, 0.0, 1.0);
 }`;
+}
 
 const FS_MESH = `#version 300 es
 precision highp float;
@@ -88,6 +94,18 @@ precision highp float;
 in vec2 v_uv; out vec4 o; uniform sampler2D u_src; uniform float u_decay;
 void main() { o = max(texture(u_src, v_uv) * u_decay - vec4(1.5 / 255.0), vec4(0.0)); }`;
 
+const FS_COMP_SIMPLE = `#version 300 es
+precision highp float;
+in vec2 v_uv; out vec4 o;
+uniform sampler2D u_src; uniform vec2 u_texel; uniform float u_blur, u_gain, u_time, u_grain, u_soft;
+void main() {
+  vec2 d = u_texel * u_blur;
+  vec3 c = texture(u_src, v_uv).rgb * 0.4
+    + (texture(u_src, v_uv + vec2(d.x, 0.0)).rgb + texture(u_src, v_uv - vec2(d.x, 0.0)).rgb
+     + texture(u_src, v_uv + vec2(0.0, d.y)).rgb + texture(u_src, v_uv - vec2(0.0, d.y)).rgb) * 0.15;
+  o = vec4(c * u_gain, 1.0);
+}`;
+
 const FS_COMP = `#version 300 es
 precision highp float;
 in vec2 v_uv; out vec4 o;
@@ -97,9 +115,10 @@ void main() {
   vec3 sharp = texture(u_src, v_uv).rgb;
   vec3 acc = sharp * 0.16; float W = 0.16;
   for (int i = 0; i < 16; i++) {
-    float ang = float(i) * 0.3926991 + (i % 2 == 0 ? 0.0 : 0.19);
-    float r = (i % 2 == 0) ? 1.0 : 2.3;
-    float w = (i % 2 == 0) ? 0.075 : 0.035;
+    float odd = mod(float(i), 2.0);
+    float ang = float(i) * 0.3926991 + odd * 0.19;
+    float r = mix(1.0, 2.3, odd);
+    float w = mix(0.075, 0.035, odd);
     acc += texture(u_src, v_uv + vec2(cos(ang), sin(ang)) * r * u_blur * u_texel).rgb * w; W += w;
   }
   vec3 c = mix(sharp, acc / W, u_soft) * u_gain;
@@ -107,31 +126,41 @@ void main() {
   o = vec4(max(c, 0.0), 1.0);
 }`;
 
-function compile(gl, vs, fs) {
+function compile(gl, vs, fs, name) {
   const sh = (type, src) => {
     const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('Shader: ' + gl.getShaderInfoLog(s));
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS) && !gl.isContextLost())
+      throw new Error(`${name} (${type === gl.VERTEX_SHADER ? 'vértices' : 'píxeles'}): ${gl.getShaderInfoLog(s) || 'sin detalle'}`);
     return s;
   };
   const p = gl.createProgram();
-  gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+  const v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
+  gl.attachShader(p, v); gl.attachShader(p, f);
   gl.bindAttribLocation(p, 0, 'a_uv'); gl.bindAttribLocation(p, 0, 'a_pos');
   gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Programa: ' + gl.getProgramInfoLog(p));
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(`${name}: ${gl.getProgramInfoLog(p) || gl.getShaderInfoLog(v) || gl.getShaderInfoLog(f) || 'el teléfono no lo pudo armar'}`);
   const u = {};
   const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); const name = info.name.replace(/\[0\]$/, ''); u[name] = gl.getUniformLocation(p, info.name); }
   return { p, u };
 }
 
+export const __vsMesh = (m) => vsMesh(m);
 export class Renderer {
   constructor(canvas) {
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('Este navegador no tiene WebGL2. Actualizá el sistema o probá con Chrome/Safari recientes.');
     this.gl = gl; this.canvas = canvas;
-    this.mesh = compile(gl, VS_MESH, FS_MESH);
-    this.decay = compile(gl, VS_QUAD, FS_DECAY);
-    this.comp = compile(gl, VS_QUAD, FS_COMP);
+    const errs = [];
+    for (const mode of ['full', 'lite', 'rigid']) {
+      try { this.mesh = compile(gl, vsMesh(mode), FS_MESH, 'cuerpo/' + mode); this.meshMode = mode; break; }
+      catch (e) { errs.push(e.message); }
+    }
+    if (!this.mesh) throw new Error(errs.join(' · '));
+    this.decay = compile(gl, VS_QUAD, FS_DECAY, 'estela');
+    try { this.comp = compile(gl, VS_QUAD, FS_COMP, 'composición'); }
+    catch { this.comp = compile(gl, VS_QUAD, FS_COMP_SIMPLE, 'composición simple'); }
     this.floatFB = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
 
     // Malla fina: 72 × 96 celdas sobre el cuerpo.
@@ -173,6 +202,13 @@ export class Renderer {
       else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gw, gh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       const f = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, f);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      if (this.floatFB && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        // Este teléfono no puede dibujar en búferes de precisión media: se usa el formato común.
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gw, gh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        if (i === 0) this.floatFB = false;
+      }
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('No se pudo crear el búfer de fantasmas');
       gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
       this.fb[i] = { f, t };
     }

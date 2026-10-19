@@ -1,4 +1,4 @@
-# Lo que ibas a hacer — v2.1
+# Lo que ibas a hacer — v2
 
 El espectador se ve a sí mismo: su imagen real, recortada del fondo. Sus futuros son esa misma imagen, dibujada como boceto y deformada hacia movimientos que otras personas hicieron antes. No hay figuras: los fantasmas son él.
 

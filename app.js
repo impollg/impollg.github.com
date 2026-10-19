@@ -4,8 +4,8 @@ import {
   NJ, PD, SD, W, F, DT, MI, NB,
   rootScale, toSample, samplePixels, pixelsToSample, lerpArr, poseError,
   buildQuery, searchArchive, futureFromArchive, futureExtrap, extend, boneTransforms,
-} from './core.js?v=21';
-import { Renderer } from './render.js?v=21';
+} from './core.js?v=23';
+import { Renderer } from './render.js?v=23';
 
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
@@ -314,7 +314,7 @@ const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 let lastVideoTime = -1, lastTs = 0;
 function startDetect() {
   const tick = () => {
-    try { detect(); } catch (e) { console.warn(e); }
+    try { detect(); } catch (e) { report('detección', e); }
     if (useRVFC) video.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
   };
   tick();
@@ -570,6 +570,10 @@ function draw(now) {
 }
 function drawUI(now, v) {
   uctx.setTransform(1, 0, 0, 1, 0, 0); uctx.clearRect(0, 0, ui.width, ui.height);
+  if (fatal) {
+    uctx.font = `${Math.round(12 * dpr)}px ui-monospace, Menlo, monospace`; uctx.textBaseline = 'top';
+    uctx.fillStyle = '#d66'; uctx.fillText(`${fatal}  (×${fatalCount})`.slice(0, 160), 18 * dpr, ui.height - 44 * dpr);
+  }
   if (state === 'idle') {
     uctx.font = `${Math.round(13 * dpr)}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
     uctx.textBaseline = 'alphabetic'; uctx.fillStyle = '#555';
@@ -592,7 +596,7 @@ function drawUI(now, v) {
   const seeds = records.filter((r) => r.seed).reduce((a, r) => a + r.n, 0);
   const lines = [
     `estado ${state} · K ${K} · fantasmas ${ghosts.length}`,
-    `render ${rFps} fps · pose ${dFps} fps · ${delegate} · modelo ${P.model} · video ${VW}×${VH}`,
+    `render ${rFps} fps (${renderer ? renderer.meshMode : '-'}) · pose ${dFps} fps · ${delegate} · modelo ${P.model} · video ${VW}×${VH}`,
     `error ${isFinite(lastErrMin) ? lastErrMin.toFixed(2) : '–'} · obediencia < ${P.obeyThr} · desvío > ${P.devThr}`,
     `archivo ${(archiveTotal / 600).toFixed(1)} min (${(seeds / 600).toFixed(1)} semilla) · ${records.length} tramos · búsqueda ${searchMs.toFixed(1)} ms`,
     archiveTotal < P.minArchiveSec * 10 ? 'archivo insuficiente: predice por extrapolación' : 'predice desde el archivo',
@@ -620,7 +624,17 @@ function frame(now) {
   }
   draw(now);
 }
-function loop(now) { requestAnimationFrame(loop); try { frame(now); } catch (e) { console.warn(e); } }
+function loop(now) {
+  requestAnimationFrame(loop);
+  try { frame(now); } catch (e) { report('imagen', e); try { drawUI(now, viewParams()); } catch {} }
+}
+// Cualquier falla durante la obra se escribe en pantalla (abajo, en rojo), para poder diagnosticarla.
+let fatal = '', fatalCount = 0;
+function report(where, e) {
+  fatalCount++;
+  const msg = `${where}: ${(e && e.message) || e}`;
+  if (msg !== fatal) { fatal = msg; console.warn(e); }
+}
 let reopening = false;
 function watchdog() {
   if (!started || reopening) return;
@@ -719,7 +733,7 @@ function updateStats() {
   const min = (rs) => (rs.reduce((a, r) => a + r.n, 0) / 600).toFixed(1);
   $('#pstats').textContent =
     `Archivo: ${min(records)} min en ${records.length} tramos (semilla ${min(seeds)} min · visitas ${min(visits)} min)\n` +
-    `Tope: ${(P.maxSamples / 600).toFixed(0)} min · Pose: ${delegate} · Render ${rFps} fps · Pose ${dFps} fps\n` +
+    `Tope: ${(P.maxSamples / 600).toFixed(0)} min · Pose: ${delegate} · Imagen: ${renderer ? renderer.meshMode : '-'} · Render ${rFps} fps · Pose ${dFps} fps\n` +
     `Estado: ${started ? state : 'sin iniciar'} · ${navigator.serviceWorker?.controller ? 'disponible sin conexión' : 'sin caché offline todavía'}`;
 }
 function openPanel() { buildForm(); updateStats(); panel.hidden = false; }
@@ -754,4 +768,5 @@ $('#importFile').addEventListener('change', async (e) => {
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 resize();
 window.__lqiahReady = true;
+if (renderer === null) {} // se crea al tocar
 window.__lqiahDebug = () => ({ maskMean: maskU8 ? Math.round(maskU8.reduce((a, b) => a + b, 0) / maskU8.length) : -1, maskMax: maskU8 ? maskU8.reduce((a, b) => (b > a ? b : a), 0) : -1, glErr: renderer ? renderer.gl.getError() : -1, state, K, ghosts: ghosts.length, rFps, dFps, delegate, partialSeen: Math.round(partialSeen), lastSeen: Math.round(lastSeen), now: Math.round(performance.now()) });

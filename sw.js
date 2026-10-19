@@ -1,7 +1,7 @@
 // Service worker: la app y el modelo quedan en caché para funcionar sin conexión.
 // Cambiar VERSION al publicar una versión nueva.
-const VERSION = 'lqiah-v2.1';
-const SHELL = ['./', './index.html', './app.js?v=21', './core.js?v=21', './render.js?v=21', './manifest.webmanifest', './icon.svg'];
+const VERSION = 'lqiah-v2.3';
+const SHELL = ['./', './index.html', './app.js?v=23', './core.js?v=23', './render.js?v=23', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
