@@ -17,6 +17,7 @@
     font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", sans-serif; color: #ddd; }
   #cam { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
   #stage { position: fixed; left: 0; top: 0; display: block; background: #000; }
+  #ui { position: fixed; left: 0; top: 0; display: block; pointer-events: none; z-index: 2; }
   #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: #000; cursor: pointer; z-index: 5; text-align: center; padding: 24px; }
   #start .t { position: absolute; left: 18px; bottom: 18px; color: #555; font-size: 13px; }
@@ -46,6 +47,7 @@
 <body>
 <video id="cam" playsinline muted autoplay></video>
 <canvas id="stage"></canvas>
+<canvas id="ui"></canvas>
 
 <div id="start">
   <div>
@@ -90,6 +92,6 @@
     setTimeout(function () { if (!window.__lqiahReady) show('La app no terminó de cargar. Recargá la página; si sigue, el navegador puede ser demasiado viejo.'); }, 10000);
   })();
 </script>
-<script type="module" src="app.js?v=2" onerror="__lqiahFail()"></script>
+<script type="module" src="app.js?v=3" onerror="__lqiahFail()"></script>
 </body>
 </html>
