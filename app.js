@@ -4,8 +4,8 @@ import {
   NJ, PD, SD, W, F, DT, MI, NB,
   rootScale, toSample, samplePixels, pixelsToSample, lerpArr, poseError,
   buildQuery, searchArchive, futureFromArchive, futureExtrap, extend, boneTransforms,
-} from './core.js';
-import { Renderer } from './render.js';
+} from './core.js?v=21';
+import { Renderer } from './render.js?v=21';
 
 const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';

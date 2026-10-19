@@ -2,7 +2,7 @@
 // Cada fantasma es esa misma imagen deformada hacia la pose predicha: una malla fina sobre el cuerpo,
 // donde cada vértice sigue a los huesos cercanos (skinning 2D). Los fantasmas se acumulan en un
 // búfer con estela, desenfoque y grano.
-import { NB } from './core.js';
+import { NB } from './core.js?v=21';
 
 const VS_MESH = `#version 300 es
 precision highp float;
