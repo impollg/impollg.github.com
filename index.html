@@ -78,6 +78,18 @@
   </div>
 </div>
 
-<script type="module" src="app.js"></script>
+<script>
+  // Muestra en pantalla cualquier error, para que la app nunca quede muda.
+  (function () {
+    var show = function (msg) {
+      var el = document.getElementById('startErr'); if (el && !el.textContent) el.textContent = msg;
+    };
+    window.addEventListener('error', function (e) { show('Error: ' + (e.message || 'no se pudo cargar un archivo de la app')); });
+    window.addEventListener('unhandledrejection', function (e) { show('Error: ' + ((e.reason && e.reason.message) || e.reason)); });
+    window.__lqiahFail = function () { show('No se pudo cargar app.js / core.js. Revisá que estén subidos junto a index.html.'); };
+    setTimeout(function () { if (!window.__lqiahReady) show('La app no terminó de cargar. Recargá la página; si sigue, el navegador puede ser demasiado viejo.'); }, 10000);
+  })();
+</script>
+<script type="module" src="app.js?v=2" onerror="__lqiahFail()"></script>
 </body>
 </html>

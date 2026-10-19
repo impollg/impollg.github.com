@@ -1,5 +1,7 @@
 // Lo que ibas a hacer — app principal.
-import { FilesetResolver, PoseLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+// MediaPipe se importa recién al iniciar (import dinámico), para que el toque funcione siempre
+// y cualquier falla de carga se muestre en pantalla en vez de dejar la app muda.
+const MP_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 import {
   JOINTS, J, NJ, PD, SD, W, F, DT, BONES,
   rootScale, toSample, samplePixels, pixelsToSample, lerpArr, poseError,
@@ -105,7 +107,7 @@ addEventListener('resize', resize);
 let started = false, state = 'idle';
 let stream = null, landmarker = null, delegate = '-';
 let session = null, seg = [], segT = [], lastDet = null, nextGrid = 0;
-let curPose = null, curRoot = null, curPoseT = -1e9, lastSeen = -1e9;
+let curPose = null, curRoot = null, curPoseT = -1e9, lastSeen = -1e9, partialSeen = -1e9;
 let K = P.kInit, lastKChange = 0, lastPredict = 0, checks = [];
 let ghosts = [], gid = 0;
 let persistStart = 0, persistEnd = 0;
@@ -250,15 +252,27 @@ function updateVideoSize() {
   }
 }
 async function loadModel() {
+  let mp;
+  try { mp = await import(MP_URL); }
+  catch { throw new Error('No se pudo descargar MediaPipe. Revisá la conexión a internet y volvé a intentar.'); }
+  const { FilesetResolver, PoseLandmarker } = mp;
   const fs = await FilesetResolver.forVisionTasks(WASM_URL);
   const opts = (d) => ({
     baseOptions: { modelAssetPath: MODEL_URL, delegate: d }, runningMode: 'VIDEO',
     numPoses: P.numPoses, outputSegmentationMasks: true,
     minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5,
   });
-  try { landmarker = await PoseLandmarker.createFromOptions(fs, opts('GPU')); delegate = 'GPU'; }
-  catch { landmarker = await PoseLandmarker.createFromOptions(fs, opts('CPU')); delegate = 'CPU'; }
+  try { landmarker = await withTimeout(PoseLandmarker.createFromOptions(fs, opts('GPU')), 20000); delegate = 'GPU'; }
+  catch {
+    status('cargando modelo (modo CPU)…');
+    try { landmarker = await withTimeout(PoseLandmarker.createFromOptions(fs, opts('CPU')), 30000); delegate = 'CPU'; }
+    catch (e) { throw new Error('No se pudo cargar el modelo de pose: ' + (e && e.message || e)); }
+  }
 }
+function withTimeout(p, ms) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('tardó demasiado')), ms))]);
+}
+function status(t) { const h = startEl.querySelector('.hint'); if (h) h.textContent = t; }
 
 // ───────────────────────── Detección ─────────────────────────
 const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
@@ -293,7 +307,7 @@ function onResult(res, t) {
   const p = new Float32Array(PD), v = new Float32Array(NJ);
   for (let i = 0; i < NJ; i++) { const l = lm[JOINTS[i]]; p[2 * i] = l.x * VW; p[2 * i + 1] = l.y * VH; v[i] = l.visibility ?? 1; }
   const need = [J.ls, J.rs, J.lh, J.rh]; if (P.requireLegs) need.push(J.lk, J.rk);
-  if (!need.every((i) => v[i] > 0.5)) return;
+  if (!need.every((i) => v[i] > 0.5)) { partialSeen = t; return; }
   const m = res.segmentationMasks && res.segmentationMasks[idx];
   if (m) copyMask(m);
   lastSeen = t;
@@ -523,6 +537,12 @@ function draw(now) {
   if (state === 'idle') {
     ctx.fillStyle = '#555'; ctx.font = `${Math.round(13 * dpr)}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
     ctx.textBaseline = 'alphabetic'; ctx.fillText('Lo que ibas a hacer', 18 * dpr, ch - 18 * dpr);
+    // En reposo, si hay alguien pero no entra entero, una indicación discreta.
+    if (now - partialSeen < 600) {
+      ctx.fillStyle = '#3a3a3a'; ctx.textAlign = 'right';
+      ctx.fillText('alejate: tiene que verse el cuerpo entero', cw - 18 * dpr, ch - 18 * dpr);
+      ctx.textAlign = 'left';
+    }
   }
 }
 function drawDebug(now) {
@@ -599,17 +619,26 @@ let starting = false;
 async function start() {
   if (started || starting) return;
   starting = true; startErr.textContent = '';
-  startEl.querySelector('.hint').textContent = 'cargando…';
+  status('abriendo cámara…');
   goFullscreen(); // tiene que ir antes de cualquier await: requiere el gesto del usuario
   try {
     if (!window.isSecureContext) throw new Error('La cámara exige HTTPS. Abrí la app desde su dirección https://.');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+      throw new Error('Este navegador no da acceso a la cámara. Abrí la dirección en Safari (iPhone) o Chrome (Android), no dentro de otra app.');
     await openCamera();
+    status('cargando modelo…');
     await loadModel();
+    status('cargando archivo…');
     await loadArchive();
   } catch (e) {
     starting = false;
-    startEl.querySelector('.hint').textContent = 'tocar para reintentar';
-    startErr.textContent = e && e.name === 'NotAllowedError' ? 'Sin permiso para usar la cámara.' : String(e && e.message || e);
+    status('tocar para reintentar');
+    const n = e && e.name;
+    startErr.textContent =
+      n === 'NotAllowedError' ? 'Sin permiso para usar la cámara. Habilitalo en los ajustes del navegador para este sitio y volvé a tocar.' :
+      n === 'NotFoundError' || n === 'OverconstrainedError' ? 'No se encontró la cámara pedida. Probá cambiar a la otra cámara en el panel.' :
+      n === 'NotReadableError' ? 'La cámara está siendo usada por otra app. Cerrala y volvé a tocar.' :
+      String(e && e.message || e);
     return;
   }
   started = true; starting = false;
@@ -704,3 +733,4 @@ $('#importFile').addEventListener('change', async (e) => {
 // ───────────────────────── PWA ─────────────────────────
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 resize();
+window.__lqiahReady = true;
